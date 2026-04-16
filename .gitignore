@@ -1,0 +1,10 @@
+/target
+Cargo.lock
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+
+# Local benchmark fixtures — bring your own, or run gen_negatives example
+/testset/
