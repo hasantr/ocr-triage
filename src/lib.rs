@@ -19,6 +19,13 @@ mod score;
 
 pub use config::{TriageConfig, TriageMode};
 
+/// Benchmark ve teşhis için internal phases'e erişim. API olgunlaşmadı,
+/// kararlı kullanım için `has_text*` tercih edin.
+#[doc(hidden)]
+pub mod __internal {
+    pub use crate::decode::decode_thumbnail;
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TriageVerdict {
     pub has_text: bool,

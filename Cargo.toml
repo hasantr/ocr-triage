@@ -1,6 +1,6 @@
 [package]
 name = "ocr-triage"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = [
@@ -20,8 +20,9 @@ categories = ["computer-vision", "multimedia::images"]
 path = "src/lib.rs"
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff", "bmp"] }
-zune-jpeg = "0.5"
+image = { version = "0.25", default-features = false, features = ["png", "webp", "tiff", "bmp"] }
+jpeg-decoder = "0.3"
+zune-png = "0.5"
 zune-core = "0.5"
 
 [dev-dependencies]
@@ -45,3 +46,15 @@ path = "examples/gen_negatives.rs"
 [[example]]
 name = "bench_pixels"
 path = "examples/bench_pixels.rs"
+
+[[example]]
+name = "bench_breakdown"
+path = "examples/bench_breakdown.rs"
+
+[[example]]
+name = "probe_jpeg_scale"
+path = "examples/probe_jpeg_scale.rs"
+
+[[example]]
+name = "probe_png_phases"
+path = "examples/probe_png_phases.rs"

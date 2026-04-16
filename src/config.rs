@@ -14,11 +14,11 @@ pub struct TriageConfig {
 
 impl TriageConfig {
     /// FN minimize — düşük eşik, text kaçırma riski en aza, FP biraz tolere.
-    /// Sentetik dataset üstünde Positive minimum 0.297, Negative maximum 0.248
-    /// → 0.27 güvenli orta.
+    /// Validation set üstünde Positive minimum 0.269 (Courier-font screenshot),
+    /// Negative maximum 0.169 → 0.25 güvenli orta. Üstte ~0.08 marj var.
     pub fn conservative() -> Self {
         TriageConfig {
-            threshold: 0.27,
+            threshold: 0.25,
             thumbnail_short_edge: 256,
         }
     }
