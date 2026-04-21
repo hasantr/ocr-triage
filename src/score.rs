@@ -34,7 +34,11 @@ pub fn compute_raw(gray: &[u8], width: u32, height: u32) -> f32 {
     let binary = otsu_binarize(gray);
 
     let global = score_block(&binary, width, height, 0, 0, width, height);
-    let regional = regional_top_k(&binary, width, height, 2, 2);
+    // 4×4 TOP-K=2: sparse text (image'ın <%10'unda yoğunlaşmış metin) için
+    // 2×2 dilüsyon'u aşar. Cell başına 1/4 alan, metin-yoğun tek cell'in skoru
+    // 3× daha yüksek çıkar. Uniform pattern'lerde (icon grid, QR) tüm cell'ler
+    // benzer olduğundan top-k=2 aynı kalır, yeni FP üretmez.
+    let regional = regional_top_k(&binary, width, height, 4, 2);
     let raw_score = global.max(regional * 0.9);
 
     // Coverage filter: foreground oranı "text" aralığında mı?
@@ -156,11 +160,33 @@ fn regional_top_k(binary: &[u8], width: u32, height: u32, grid: u32, top_k: usiz
 }
 
 /// Belirli dikdörtgen bölgede edge × variance skoru (binary input).
+///
+/// Hem yatay (horizontal) hem dikey (vertical) orientation'lar için ayrı ayrı
+/// edge density + projection variance hesaplanır, geometric mean (√(edge·var))
+/// alınır; sonra iki yön skorlarının max'ı döner.
+///
+/// - Horizontal path (latin, kiril, arap, yunan, hebrew, Devanagari): h_score
+///   yüksek, v_score düşük → max = h_score (eski davranış korunur).
+/// - Vertical path (geleneksel CJK dikey yazı, rotated scan'lar): h_score
+///   düşük, v_score yüksek → max = v_score (yeni kapsam).
+/// - Uniform noise / solid / gradient: hepsi düşük → max düşük (FP değil).
+/// - Vertical stripes: v_edge yüksek ama coverage_weight 45-55% bandında
+///   agresif penalize edildiği için global'de filtrelenir.
 #[inline]
 fn score_block(binary: &[u8], stride: u32, _height: u32, x0: u32, y0: u32, w: u32, h: u32) -> f32 {
-    let edge = horizontal_edge_density_block(binary, stride, x0, y0, w, h);
-    let variance = projection_variance_block(binary, stride, x0, y0, w, h);
-    (edge * variance).sqrt()
+    let edge_h = horizontal_edge_density_block(binary, stride, x0, y0, w, h);
+    let var_h = projection_variance_block(binary, stride, x0, y0, w, h);
+    let h_score = (edge_h * var_h).sqrt();
+
+    let edge_v = vertical_edge_density_block(binary, stride, x0, y0, w, h);
+    let var_v = vertical_projection_variance_block(binary, stride, x0, y0, w, h);
+    let v_score = (edge_v * var_v).sqrt();
+
+    // Vertical'a %15 discount: script'lerin %95'i yatay, vertical sadece CJK
+    // geleneksel dikey ve rotated scan için. Discount CJK'yı (v_score ≥ 0.5+)
+    // rahatça eşik üstünde tutarken, geometrik şekillerin (logo outline vb.)
+    // yanlışlıkla yüksek v_score'la FP olmasını engeller.
+    h_score.max(v_score * 0.85)
 }
 
 /// Binary üstünde yatay foreground/background transition sayısı.
@@ -216,5 +242,85 @@ fn projection_variance_block(binary: &[u8], stride: u32, x0: u32, y0: u32, w: u3
     let mean = row_cov.iter().copied().sum::<f32>() / n;
     let var = row_cov.iter().map(|&v| (v - mean).powi(2)).sum::<f32>() / n;
     // std çoğu text'te 0.10-0.25 aralığında.
+    (var.sqrt() / 0.18).min(1.0)
+}
+
+/// Binary üstünde dikey foreground/background transition sayısı.
+/// Her x için y→y+1 geçişlerini sayar. Dikey yazılan CJK karakterlerde,
+/// rotated scan'larda, icon satırlarında yüksek olur.
+///
+/// Implementation: adjacent scanline pair'ları arası `simd::xor_sum`.
+/// Binary input'ta xor_sum == mismatch sayısı.
+fn vertical_edge_density_block(
+    binary: &[u8],
+    stride: u32,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+) -> f32 {
+    if w < 1 || h < 2 {
+        return 0.0;
+    }
+    let stride = stride as usize;
+    let x0 = x0 as usize;
+    let y0 = y0 as usize;
+    let w = w as usize;
+    let h = h as usize;
+    let mut edges = 0u32;
+    let total = (w * (h - 1)) as u32;
+    for yy in 0..h - 1 {
+        let a_start = (y0 + yy) * stride + x0;
+        let b_start = (y0 + yy + 1) * stride + x0;
+        let row_a = &binary[a_start..a_start + w];
+        let row_b = &binary[b_start..b_start + w];
+        edges += crate::simd::xor_sum(row_a, row_b);
+    }
+    // Normalization horizontal ile aynı — text'te tipik 0.05-0.20 aralığı.
+    (edges as f32 / total.max(1) as f32 / 0.16).min(1.0)
+}
+
+/// Binary üstünde sütun-bazlı foreground kaplama varyansı.
+/// Dikey yazı: sütun kaplama alternasyonu (glyph sütunu vs dikey boşluk) →
+/// yüksek varyans. Yatay text: sütunlar benzer kaplama → düşük varyans.
+/// Uniform stripe'lar: hep-dolu ve hep-boş sütunların karışımı → çok yüksek
+/// varyans ama coverage_weight (45-55% bandı) filtrelemesi bu case'i keser.
+fn vertical_projection_variance_block(
+    binary: &[u8],
+    stride: u32,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+) -> f32 {
+    if w == 0 || h == 0 {
+        return 0.0;
+    }
+    let stride = stride as usize;
+    let x0 = x0 as usize;
+    let y0 = y0 as usize;
+    let w = w as usize;
+    let h = h as usize;
+    // Per-column FG count'u tek pas accumulate et. Stride access cache-unfriendly
+    // ama 256×256 buffer L2'ye sığar, toplam ~150 µs.
+    let mut col_count = vec![0u32; w];
+    for yy in 0..h {
+        let row_start = (y0 + yy) * stride + x0;
+        let row = &binary[row_start..row_start + w];
+        for (xx, &b) in row.iter().enumerate() {
+            col_count[xx] += b as u32;
+        }
+    }
+    let h_f = h as f32;
+    let n = w as f32;
+    let mean: f32 = col_count.iter().map(|&c| c as f32 / h_f).sum::<f32>() / n;
+    let var: f32 = col_count
+        .iter()
+        .map(|&c| {
+            let r = c as f32 / h_f;
+            (r - mean).powi(2)
+        })
+        .sum::<f32>()
+        / n;
     (var.sqrt() / 0.18).min(1.0)
 }

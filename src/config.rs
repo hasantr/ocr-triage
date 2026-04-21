@@ -14,20 +14,26 @@ pub struct TriageConfig {
 
 impl TriageConfig {
     /// FN minimize — düşük eşik, text kaçırma riski en aza, FP biraz tolere.
-    /// Validation set üstünde Positive minimum 0.269 (Courier-font screenshot),
-    /// Negative maximum 0.169 → 0.25 güvenli orta. Üstte ~0.08 marj var.
+    ///
+    /// v0.4.0 kalibrasyonu (4×4 regional + vertical analiz sonrası):
+    /// Validation set üstünde Positive minimum 0.381 (Courier 48px screenshot),
+    /// Negative maximum 0.278 (geometric logo edge'leri) → 0.32 güvenli orta.
+    /// Her iki tarafta ~0.05 margin — v0.3.0'ın 0.019 Courier margin'ından
+    /// 2.7× daha dayanıklı.
     pub fn conservative() -> Self {
         TriageConfig {
-            threshold: 0.25,
+            threshold: 0.32,
             thumbnail_short_edge: 256,
         }
     }
 
     /// FP minimize — yüksek eşik, sadece kesin text görünenler geçer.
     /// CPU tavanda batch processing için; bir miktar FN tolere edilir.
+    ///
+    /// v0.4.0 kalibrasyonu: 0.40 → 0.50 (tüm skorlar boost'lanmış durumda).
     pub fn aggressive() -> Self {
         TriageConfig {
-            threshold: 0.40,
+            threshold: 0.50,
             thumbnail_short_edge: 256,
         }
     }

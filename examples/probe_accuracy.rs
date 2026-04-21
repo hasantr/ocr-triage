@@ -191,6 +191,32 @@ fn mk_tiny_text(w: u32, h: u32) -> RgbImage {
     img
 }
 
+fn mk_vertical_text(w: u32, h: u32) -> RgbImage {
+    // Dikey yazılan CJK benzeri: karakterler sütun-bazlı alt alta
+    // dizilmiş, satırlar yerine sütunlar glyph/interline ayrımı taşır.
+    let mut img = RgbImage::from_pixel(w, h, Rgb([255, 255, 255]));
+    // 3 sütun text, her sütun ~14 px kalın glyph bölgesi
+    for col_x in (40..w - 40).step_by(60) {
+        for x in col_x..(col_x + 28).min(w - 40) {
+            // Her karakter ~30 px yükseklikte, aralarda ~10 px boşluk
+            for y_base in (40..h - 40).step_by(40) {
+                for y in y_base..(y_base + 30).min(h - 40) {
+                    // Glyph iç pattern: dikey-yatay çizgiler (CJK benzeri kompleks stroke)
+                    let gx = (x - col_x) as i32;
+                    let gy = (y - y_base) as i32;
+                    let stroke = (gx == 0 || gx == 14 || gx == 27)
+                        || (gy == 0 || gy == 15 || gy == 29)
+                        || (gx.abs_diff(14) == 0);
+                    if stroke && x < w && y < h {
+                        img.put_pixel(x, y, Rgb([20, 20, 20]));
+                    }
+                }
+            }
+        }
+    }
+    img
+}
+
 fn mk_inverted_text(w: u32, h: u32) -> RgbImage {
     // Siyah arka, beyaz yazı — polarity-invariant test.
     let mut img = RgbImage::from_pixel(w, h, Rgb([10, 10, 15]));
@@ -251,6 +277,12 @@ fn main() {
         "inverted text: white on dark (polarity)",
         true,
         &synth_png(&DynamicImage::ImageRgb8(mk_inverted_text(w, h))),
+        &cfg,
+    );
+    eval_synth(
+        "vertical CJK-like (dikey yazı)",
+        true,
+        &synth_png(&DynamicImage::ImageRgb8(mk_vertical_text(w, h))),
         &cfg,
     );
     eval_synth(

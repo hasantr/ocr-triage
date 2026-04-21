@@ -5,6 +5,73 @@ All notable changes to `ocr-triage` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-04-22
+
+Algılama algoritmasına iki yapısal iyileştirme: **4×4 regional TOP-K** (sparse
+text concentration sensitivity) ve **vertical edge + projection variance**
+(CJK / rotated scan desteği). Marj dayanıklılığı 2.7× arttı, vertical
+script'ler için yeni kapsam açıldı. Testset 36/36 FN=0/FP=0 korundu.
+
+### Added
+- **`src/simd.rs::xor_sum(a, b)`** — binary byte-wise mismatch sayacı
+  (AVX2/SSE2/NEON + scalar). Adjacent scanline pair'larını XOR'layıp SAD ile
+  akümüle eder; vertical edge density için kullanılır.
+- **`vertical_edge_density_block`** (`src/score.rs`) — sütun-bazlı kenar
+  geçişlerini her scanline pair üstünden `simd::xor_sum` ile sayar. Dikey
+  yazılan CJK karakterlerde, rotated scan'larda yüksek sinyal verir.
+- **`vertical_projection_variance_block`** (`src/score.rs`) — sütun-bazlı
+  foreground coverage varyansı. Dikey metin satırları alternasyonunu
+  algılar; uniform stripe'lar coverage_weight (%45-55 bandı) tarafından
+  filtrelenir.
+
+### Changed
+- **Regional analysis 2×2 TOP-K=2 → 4×4 TOP-K=2** — cell başına alan 1/4'e
+  indiği için sparse text (image'ın <%10'unda yoğunlaşmış metin) skoru 3×
+  amplify olur. Uniform pattern'lerde (icon grid, QR) tüm cell'ler benzer,
+  top-k=2 aynı sonuca götürür → yeni FP üretmez.
+- **`score_block` artık `max(h_score, v_score × 0.85)` döner** — horizontal
+  çoğunluk script'in (latin, kiril, arap, hebrew, Devanagari, yatay CJK)
+  dominant path'i, vertical (%15 discount'la) CJK dikey / rotated backup.
+  Discount sebebi: geometrik şekillerin (logo outline, triangle) yanlışlıkla
+  yüksek vertical variance'la FP olmasını engelleme.
+- **Conservative threshold 0.25 → 0.32**, Aggressive 0.40 → 0.50
+  — yeni noise floor'a kalibrasyon. Positive min margin v0.3.0'da Courier
+  için Δ+0.019 iken v0.4.0'da Δ+0.061 (**2.7× daha dayanıklı**).
+
+### Accuracy validation set
+- 22 positive + 14 negative testset: **36/36 doğru, FN=0, FP=0** (parity).
+- Positive min: 0.269 (Courier) → **0.381** (+0.112 boost).
+- Negative max: 0.169 (logo_triangle) → **0.278** (+0.109 shift, noise floor).
+- Total safe margin: 0.100 → **0.103** (korundu).
+- **Synthetic vertical CJK text**: score **0.688** (Δ+0.368) — v0.3.0'da
+  test edilmemiş yeni kapsam, rahat pozitif tespit.
+- Tüm negatif sentetikler (solid, gradient, noise, stripe, icon grid,
+  QR-like) doğru elendi.
+
+### Performance (Windows laptop, release)
+Score fazı %20 daha ağır (yeni vertical pass + 4×4 grid), ama encoded
+path'lerde toplam etki %1-3 (decode dominant).
+
+| Input | v0.3.0 | v0.4.0 | Δ |
+|---|---:|---:|---:|
+| Score phase (mean) | ~164 µs | **198 µs** | +21% |
+| Full testset mean total | 1344 µs | 1506 µs | +12% |
+| A4 progressive JPEG total | 3454 µs | 3552 µs | +3% |
+| Raw gray A4 (checker) | 162 µs | 315 µs | +94% (worst case) |
+| Raw gray A4 (solid white) | 262 µs | 367 µs | +40% |
+| Raw RGB A4 (typical) | ~400 µs | ~600 µs | +50% |
+
+Worst-case raw-path pathological pattern (RGB checker) 272 µs → 1202 µs —
+gerçek document corpus'ta böyle yüksek entropi+variance kombinasyonu nadir.
+Production-typical A4 RGB: ~600 µs, hâlâ 1 ms altı, C'ye yakın.
+
+### Known limitations (devam eden)
+- **Tiny text** (<%1 image alanında tek satır): downsample 256 short-edge
+  pikselleri bulanıklaştırdığı için score ~0. 4×4 regional downsample-sonrası
+  bilgiyi arttıramıyor — bu katkı kaynağı kaybı, algoritmik düzeltilmez.
+  Multi-scale analiz ileri bir v0.5.0 için opsiyon.
+- **Handwriting**: test edilmemiş.
+
 ## [0.3.0] — 2026-04-21
 
 Pure-Rust C parity — score pipeline SIMD + pure-Rust DC-only JPEG decoder

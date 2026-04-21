@@ -298,6 +298,129 @@ unsafe fn count_transitions_neon(row: &[u8]) -> u32 {
 }
 
 // ------------------------------------------------------------
+// xor_sum: Σ (a[i] != b[i]) — binary input için sum of byte-wise XOR.
+// Vertical edge density için adjacent scanline pair'lar üstünde çağrılır.
+// Binary input'ta (0/1 değerler), XOR'un byte toplamı = mismatch sayısı.
+// ------------------------------------------------------------
+
+pub fn xor_sum(a: &[u8], b: &[u8]) -> u32 {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return 0;
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    {
+        if is_x86_feature_detected!("avx2") {
+            return unsafe { xor_sum_avx2(&a[..n], &b[..n]) };
+        }
+        if is_x86_feature_detected!("sse2") {
+            return unsafe { xor_sum_sse2(&a[..n], &b[..n]) };
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        return unsafe { xor_sum_neon(&a[..n], &b[..n]) };
+    }
+
+    #[allow(unreachable_code)]
+    xor_sum_scalar(&a[..n], &b[..n])
+}
+
+fn xor_sum_scalar(a: &[u8], b: &[u8]) -> u32 {
+    let mut total = 0u32;
+    for i in 0..a.len() {
+        total += (a[i] ^ b[i]) as u32;
+    }
+    total
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "avx2")]
+unsafe fn xor_sum_avx2(a: &[u8], b: &[u8]) -> u32 {
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+
+    let n = a.len();
+    let mut acc = _mm256_setzero_si256();
+    let zero = _mm256_setzero_si256();
+    let mut i = 0usize;
+    while i + 32 <= n {
+        let va = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
+        let vb = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
+        let vd = _mm256_xor_si256(va, vb);
+        let sad = _mm256_sad_epu8(vd, zero);
+        acc = _mm256_add_epi64(acc, sad);
+        i += 32;
+    }
+    let mut tmp = [0u64; 4];
+    _mm256_storeu_si256(tmp.as_mut_ptr() as *mut __m256i, acc);
+    let mut total = (tmp[0] + tmp[1] + tmp[2] + tmp[3]) as u32;
+    while i < n {
+        total += (a[i] ^ b[i]) as u32;
+        i += 1;
+    }
+    total
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "sse2")]
+unsafe fn xor_sum_sse2(a: &[u8], b: &[u8]) -> u32 {
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+
+    let n = a.len();
+    let mut acc = _mm_setzero_si128();
+    let zero = _mm_setzero_si128();
+    let mut i = 0usize;
+    while i + 16 <= n {
+        let va = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
+        let vb = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
+        let vd = _mm_xor_si128(va, vb);
+        let sad = _mm_sad_epu8(vd, zero);
+        acc = _mm_add_epi64(acc, sad);
+        i += 16;
+    }
+    let mut tmp = [0u64; 2];
+    _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, acc);
+    let mut total = (tmp[0] + tmp[1]) as u32;
+    while i < n {
+        total += (a[i] ^ b[i]) as u32;
+        i += 1;
+    }
+    total
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn xor_sum_neon(a: &[u8], b: &[u8]) -> u32 {
+    use std::arch::aarch64::*;
+    let n = a.len();
+    let mut acc = vdupq_n_u32(0);
+    let mut i = 0usize;
+    while i + 16 <= n {
+        let va = vld1q_u8(a.as_ptr().add(i));
+        let vb = vld1q_u8(b.as_ptr().add(i));
+        let vd = veorq_u8(va, vb);
+        let s16 = vpaddlq_u8(vd);
+        let s32 = vpaddlq_u16(s16);
+        acc = vaddq_u32(acc, s32);
+        i += 16;
+    }
+    let mut total = vaddvq_u32(acc);
+    while i < n {
+        total += (a[i] ^ b[i]) as u32;
+        i += 1;
+    }
+    total
+}
+
+// ------------------------------------------------------------
 // sum_u8: Σ buf[i]
 // ------------------------------------------------------------
 
@@ -477,6 +600,17 @@ mod tests {
             let expected = sum_u8_scalar(&buf);
             let actual = sum_u8(&buf);
             assert_eq!(actual, expected, "sum_u8 mismatch n={}", n);
+        }
+    }
+
+    #[test]
+    fn xor_sum_matches_scalar() {
+        for &n in &[0usize, 1, 15, 16, 17, 31, 32, 33, 63, 64, 100, 1000, 65_537] {
+            let a: Vec<u8> = (0..n).map(|i| ((i * 3 + 1) & 1) as u8).collect();
+            let b: Vec<u8> = (0..n).map(|i| ((i * 7 + 5) & 1) as u8).collect();
+            let expected = xor_sum_scalar(&a, &b);
+            let actual = xor_sum(&a, &b);
+            assert_eq!(actual, expected, "xor_sum mismatch n={}", n);
         }
     }
 
