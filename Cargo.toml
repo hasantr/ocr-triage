@@ -1,6 +1,6 @@
 [package]
 name = "ocr-triage"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
 authors = [
@@ -20,10 +20,15 @@ categories = ["computer-vision", "multimedia::images"]
 path = "src/lib.rs"
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["png", "webp", "tiff", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "webp", "tiff", "bmp", "gif"] }
 jpeg-decoder = "0.3"
 zune-png = "0.5"
 zune-core = "0.5"
+# `flate2` transitive olarak `png` crate üstünden geliyor. Burada explicit
+# dep + `zlib-rs` feature açmak, dep graph'ındaki tüm flate2 tüketicilerini
+# (özellikle image crate'in PNG decode'u) pure-Rust zlib-ng portuna yönlendirir.
+# miniz_oxide'tan ~2-3× hız kazancı A4 PNG inflate'inde.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -58,3 +63,27 @@ path = "examples/probe_jpeg_scale.rs"
 [[example]]
 name = "probe_png_phases"
 path = "examples/probe_png_phases.rs"
+
+[[example]]
+name = "probe_dc"
+path = "examples/probe_dc.rs"
+
+[[example]]
+name = "gen_a4_png"
+path = "examples/gen_a4_png.rs"
+
+[[example]]
+name = "probe_png"
+path = "examples/probe_png.rs"
+
+[[example]]
+name = "probe_png_ab"
+path = "examples/probe_png_ab.rs"
+
+[[example]]
+name = "probe_formats"
+path = "examples/probe_formats.rs"
+
+[[example]]
+name = "probe_accuracy"
+path = "examples/probe_accuracy.rs"

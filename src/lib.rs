@@ -15,15 +15,28 @@
 
 mod config;
 mod decode;
+mod jpeg_dc;
 mod score;
+mod simd;
 
 pub use config::{TriageConfig, TriageMode};
+
+/// Hangi SIMD ISA aktif: `"avx2"`, `"sse2"`, `"neon"`, veya `"scalar"`.
+pub fn active_isa() -> &'static str {
+    simd::active_isa()
+}
 
 /// Benchmark ve teşhis için internal phases'e erişim. API olgunlaşmadı,
 /// kararlı kullanım için `has_text*` tercih edin.
 #[doc(hidden)]
 pub mod __internal {
     pub use crate::decode::decode_thumbnail;
+
+    /// Probe: sadece DC-only decoder'ı dene, başarılı olursa (w, h) dön.
+    pub fn try_dc_only_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
+        let t = crate::jpeg_dc::decode_dc_thumbnail(bytes)?;
+        Some((t.width, t.height))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

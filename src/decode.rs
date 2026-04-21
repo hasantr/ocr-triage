@@ -3,6 +3,8 @@ use jpeg_decoder::{Decoder as JpegDecoder, PixelFormat};
 use zune_core::colorspace::ColorSpace;
 use zune_png::PngDecoder;
 
+use crate::jpeg_dc;
+
 #[derive(Debug, Clone, Copy)]
 enum Format {
     Jpeg,
@@ -10,6 +12,7 @@ enum Format {
     Webp,
     Tiff,
     Bmp,
+    Gif,
     Unknown,
 }
 
@@ -33,6 +36,10 @@ fn sniff(bytes: &[u8]) -> Format {
     if bytes.starts_with(b"BM") {
         return Format::Bmp;
     }
+    // "GIF87a" or "GIF89a"
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Format::Gif;
+    }
     Format::Unknown
 }
 
@@ -42,12 +49,59 @@ fn sniff(bytes: &[u8]) -> Format {
 /// image crate ile full decode + Nearest subsample.
 pub fn decode_thumbnail(bytes: &[u8], short_edge: u32) -> Option<GrayImage> {
     match sniff(bytes) {
-        Format::Jpeg => decode_jpeg_scaled(bytes, short_edge)
+        // JPEG: önce pure-Rust DC-only decoder (baseline SOF0 + progressive
+        // SOF2 ilk DC scan'ı, AC IDCT'si atlanır). Başarısız olursa
+        // jpeg-decoder scaled decode'a düş; o da başarısız olursa image fallback.
+        Format::Jpeg => decode_jpeg_dc_only(bytes, short_edge)
+            .or_else(|| decode_jpeg_scaled(bytes, short_edge))
             .or_else(|| decode_image_fallback(bytes, short_edge)),
-        Format::Png => {
-            decode_png_zune(bytes, short_edge).or_else(|| decode_image_fallback(bytes, short_edge))
-        }
+
+        // PNG: crossover ~1 MP'de. Küçük PNG'lerde zune-png (zune-inflate)
+        // daha az per-call overhead'li; büyük PNG'lerde image + flate2/zlib-rs
+        // inflate'i 1.5-1.7× daha hızlı (A4 photo: 24 ms → 14 ms).
+        Format::Png => match peek_png_dims(bytes) {
+            Some((w, h)) if (w as u64) * (h as u64) >= 1_000_000 => decode_image_fallback(bytes, short_edge)
+                .or_else(|| decode_png_zune(bytes, short_edge)),
+            _ => decode_png_zune(bytes, short_edge)
+                .or_else(|| decode_image_fallback(bytes, short_edge)),
+        },
         _ => decode_image_fallback(bytes, short_edge),
+    }
+}
+
+/// PNG IHDR'dan width × height'i cheaply oku. PNG signature (8 bayt) +
+/// IHDR length (4) + "IHDR" (4) + width (4 BE) + height (4 BE) = 24 bayt.
+fn peek_png_dims(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 {
+        return None;
+    }
+    // Signature: 89 50 4E 47 0D 0A 1A 0A
+    if bytes[0] != 0x89 || bytes[1] != b'P' || bytes[2] != b'N' || bytes[3] != b'G' {
+        return None;
+    }
+    if &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    Some((w, h))
+}
+
+/// Baseline JPEG → 1/8 thumbnail by reading only DC coefficients. ~10× hızlı
+/// jpeg-decoder scaled decode'dan — AC katsayılarının IDCT'si hiç yapılmaz.
+/// Progressive, 16-bit, CMYK / RGB JPEG'lerde `None` döner.
+fn decode_jpeg_dc_only(bytes: &[u8], short_edge: u32) -> Option<GrayImage> {
+    let thumb = jpeg_dc::decode_dc_thumbnail(bytes)?;
+    if thumb.width == 0 || thumb.height == 0 {
+        return None;
+    }
+    let img = GrayImage::from_raw(thumb.width, thumb.height, thumb.gray)?;
+    // DC-only 1/8 thumbnail muhtemelen hedeften büyük veya yakın — kısa kenar
+    // short_edge'e indirmek için box downsample uygula.
+    if img.width().min(img.height()) > short_edge {
+        Some(box_downsample(img, short_edge))
+    } else {
+        Some(img)
     }
 }
 

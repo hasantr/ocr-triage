@@ -1,3 +1,4 @@
+use crate::simd;
 use image::GrayImage;
 
 /// Score entry from a decoded `GrayImage` — wraps the raw-slice path.
@@ -45,8 +46,7 @@ pub fn compute_raw(gray: &[u8], width: u32, height: u32) -> f32 {
     //
     // Sabit [0,1] aralıklı bir multiplier uygulanır; hard cutoff yok çünkü
     // koyu-zemin CD kapak gibi mixed content skora zarar vermesin.
-    let fg_coverage =
-        binary.iter().map(|&p| p as u32).sum::<u32>() as f32 / binary.len().max(1) as f32;
+    let fg_coverage = simd::sum_u8(&binary) as f32 / binary.len().max(1) as f32;
     let coverage_factor = coverage_weight(fg_coverage);
 
     raw_score * coverage_factor
@@ -122,17 +122,9 @@ fn otsu_binarize(gray: &[u8]) -> Vec<u8> {
     let above = (gray.len() as u32) - below;
     let fg_is_below = below <= above;
 
-    gray.iter()
-        .map(|&p| {
-            let below_thr = p <= best_thr;
-            let is_fg = if fg_is_below { below_thr } else { !below_thr };
-            if is_fg {
-                1
-            } else {
-                0
-            }
-        })
-        .collect()
+    let mut out = vec![0u8; gray.len()];
+    simd::binarize(gray, &mut out, best_thr, fg_is_below);
+    out
 }
 
 /// 2x2 grid TOP-K scoring — uniform arka plan dolgunun küçük metin bölgesini
@@ -194,11 +186,7 @@ fn horizontal_edge_density_block(
     for yy in 0..h {
         let row_start = (y0 + yy) * stride + x0;
         let row = &binary[row_start..row_start + w];
-        for x in 0..w - 1 {
-            if row[x] != row[x + 1] {
-                edges += 1;
-            }
-        }
+        edges += simd::count_transitions(row);
     }
     let raw_density = edges as f32 / total.max(1) as f32;
     // Binary'de tipik text image'da 0.05-0.20 aralığı.

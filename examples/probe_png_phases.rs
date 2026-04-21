@@ -157,6 +157,13 @@ fn luma_a_to_luma(la: &[u8]) -> Vec<u8> {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        for path in &args {
+            bench_file(path, 20);
+        }
+        return;
+    }
     let testset = "D:/PROJELER/kreuzberg-text-triage/ocr-triage/testset";
     for f in [
         // küçük, basit
